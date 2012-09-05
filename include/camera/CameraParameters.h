@@ -734,6 +734,7 @@ public:
     static const char SCENE_MODE_BACKLIGHT[];
     static const char SCENE_MODE_FLOWERS[];
     static const char SCENE_MODE_AR[];
+    static const char SCENE_MODE_OFF[];
 #endif
     // Applications are looking for a barcode. Camera driver will be optimized
     // for barcode reading.
@@ -847,19 +848,13 @@ public:
 
     static const char KEY_SHARPNESS[];
     static const char KEY_MAX_SHARPNESS[];
-#ifdef QCOM_HARDWARE
     static const char KEY_MIN_SHARPNESS[];
-#endif
     static const char KEY_CONTRAST[];
     static const char KEY_MAX_CONTRAST[];
-#ifdef QCOM_HARDWARE
     static const char KEY_MIN_CONTRAST[];
-#endif
     static const char KEY_SATURATION[];
     static const char KEY_MAX_SATURATION[];
-#ifdef QCOM_HARDWARE
     static const char KEY_MIN_SATURATION[];
-#endif
 
     static const char KEY_HISTOGRAM[] ;
     static const char KEY_SUPPORTED_HISTOGRAM_MODES[] ;
@@ -926,6 +921,7 @@ public:
     int getOrientation() const;
     void setOrientation(int orientation);
     void setPreviewFpsRange(int minFPS,int maxFPS);
+    void setPostviewSize(int x, int y);
     void getSupportedHfrSizes(Vector<Size> &sizes) const;
 #endif
 
