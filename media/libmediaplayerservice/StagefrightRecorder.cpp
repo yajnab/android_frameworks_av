@@ -55,9 +55,9 @@
 #include <system/audio.h>
 
 #include "ARTPWriter.h"
+#include <cutils/properties.h>
 
 #ifdef QCOM_HARDWARE
-#include <cutils/properties.h>
 #include <media/AudioParameter.h>
 #include <media/stagefright/ExtendedWriter.h>
 #endif
@@ -175,7 +175,11 @@ status_t StagefrightRecorder::setAudioEncoder(audio_encoder ae) {
         mSampleRate = mSampleRate ? mSampleRate : 48000;
         mAudioChannels = mAudioChannels ? mAudioChannels : 2;
         mAudioBitRate = mAudioBitRate ? mAudioBitRate : 156000;
-    } else{
+    } else if(mAudioEncoder == AUDIO_ENCODER_AMR_WB) {
+        mSampleRate = 16000;
+        mAudioChannels = 1;
+        mAudioBitRate = 23850;
+    } else {
         mSampleRate = mSampleRate ? mSampleRate : 8000;
         mAudioChannels = mAudioChannels ? mAudioChannels : 1;
         mAudioBitRate = mAudioBitRate ? mAudioBitRate : 12200;
@@ -930,6 +934,11 @@ sp<MediaSource> StagefrightRecorder::createAudioSource() {
     sp<MediaSource> audioEncoder =
         OMXCodec::Create(client.interface(), encMeta,
                          true /* createEncoder */, audioSource);
+#ifdef QCOM_HARDWARE
+    if (mAudioSourceNode != NULL) {
+        mAudioSourceNode.clear();
+    }
+#endif
     mAudioSourceNode = audioSource;
 
     return audioEncoder;
@@ -1531,6 +1540,57 @@ status_t StagefrightRecorder::setupVideoEncoder(
     if (mVideoTimeScale > 0) {
         enc_meta->setInt32(kKeyTimeScale, mVideoTimeScale);
     }
+    
+    /*
+     * can set profile from the app as a parameter.
+     * For the mean time, set from shell
+     */
+
+    char value[PROPERTY_VALUE_MAX];
+    bool customProfile = false;
+
+    if (property_get("encoder.video.profile", value, NULL) > 0) {
+        customProfile = true;
+    }
+
+    if (customProfile) {
+        switch (mVideoEncoder) {
+        case VIDEO_ENCODER_H264:
+            if (strncmp("base", value, 4) == 0) {
+                mVideoEncoderProfile = OMX_VIDEO_AVCProfileBaseline;
+                ALOGI("H264 Baseline Profile");
+            }
+            else if (strncmp("main", value, 4) == 0) {
+                mVideoEncoderProfile = OMX_VIDEO_AVCProfileMain;
+                ALOGI("H264 Main Profile");
+            }
+            else if (strncmp("high", value, 4) == 0) {
+                mVideoEncoderProfile = OMX_VIDEO_AVCProfileHigh;
+                ALOGI("H264 High Profile");
+            }
+            else {
+               ALOGW("Unsupported H264 Profile");
+            }
+            break;
+        case VIDEO_ENCODER_MPEG_4_SP:
+            if (strncmp("simple", value, 5) == 0 ) {
+                mVideoEncoderProfile = OMX_VIDEO_MPEG4ProfileSimple;
+                ALOGI("MPEG4 Simple profile");
+            }
+            else if (strncmp("asp", value, 3) == 0 ) {
+                mVideoEncoderProfile = OMX_VIDEO_MPEG4ProfileAdvancedSimple;
+                ALOGI("MPEG4 Advanced Simple Profile");
+            }
+            else {
+                ALOGW("Unsupported MPEG4 Profile");
+            }
+            break;
+        default:
+            ALOGW("No custom profile support for other codecs");
+            break;
+        }
+    }
+
     if (mVideoEncoderProfile != -1) {
         enc_meta->setInt32(kKeyVideoProfile, mVideoEncoderProfile);
     }
@@ -1543,8 +1603,9 @@ status_t StagefrightRecorder::setupVideoEncoder(
 
     uint32_t encoder_flags = 0;
 #ifdef QCOM_HARDWARE
-    char value[PROPERTY_VALUE_MAX];
+    memset(value, 0, PROPERTY_VALUE_MAX);
 #endif
+
     if (mIsMetaDataStoredInVideoBuffers) {
         encoder_flags |= OMXCodec::kHardwareCodecsOnly;
         encoder_flags |= OMXCodec::kStoreMetaDataInVideoBuffers;
@@ -1756,7 +1817,12 @@ status_t StagefrightRecorder::stop() {
         ::close(mOutputFd);
         mOutputFd = -1;
     }
-
+#ifdef QCOM_HARDWARE
+    if (mAudioSourceNode != NULL) {
+        mAudioSourceNode.clear();
+        mAudioSourceNode = NULL;
+    }
+#endif
     if (mStarted) {
         mStarted = false;
 

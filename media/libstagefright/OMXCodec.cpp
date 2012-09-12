@@ -587,8 +587,15 @@ status_t OMXCodec::configureCodec(const sp<MetaData> &meta) {
             esds.getCodecSpecificInfo(
                     &codec_specific_data, &codec_specific_data_size);
 
+#ifdef QCOM_HARDWARE
+            meta->findCString(kKeyMIMEType, &mime_type);
+            if (strncmp(mime_type, MEDIA_MIMETYPE_AUDIO_MPEG, 10)) {
+#endif
             addCodecSpecificData(
                     codec_specific_data, codec_specific_data_size);
+#ifdef QCOM_HARDWARE
+            }
+#endif
         } else if (meta->findData(kKeyAVCC, &type, &data, &size)) {
             // Parse the AVCDecoderConfigurationRecord
 
@@ -1204,8 +1211,13 @@ status_t OMXCodec::setupErrorCorrectionParameters() {
     }
 
     errorCorrectionType.bEnableHEC = OMX_FALSE;
+#ifdef QCOM_HARDWARE
+    errorCorrectionType.bEnableResync = OMX_FALSE;
+    errorCorrectionType.nResynchMarkerSpacing = 0;
+#else
     errorCorrectionType.bEnableResync = OMX_TRUE;
     errorCorrectionType.nResynchMarkerSpacing = 256;
+#endif
     errorCorrectionType.bEnableDataPartitioning = OMX_FALSE;
     errorCorrectionType.bEnableRVLC = OMX_FALSE;
 
@@ -1378,6 +1390,15 @@ status_t OMXCodec::setupMPEG4EncoderParameters(const sp<MetaData>& meta) {
     mpeg4type.eProfile = static_cast<OMX_VIDEO_MPEG4PROFILETYPE>(profileLevel.mProfile);
     mpeg4type.eLevel = static_cast<OMX_VIDEO_MPEG4LEVELTYPE>(profileLevel.mLevel);
 
+#ifdef QCOM_HARDWARE
+    if (mpeg4type.eProfile > OMX_VIDEO_MPEG4ProfileSimple) {
+        mpeg4type.nAllowedPictureTypes |= OMX_VIDEO_PictureTypeB;
+        mpeg4type.nBFrames = 1;
+        mpeg4type.nPFrames /= (mpeg4type.nBFrames + 1);
+        mNumBFrames = mpeg4type.nBFrames;
+    }
+#endif
+
     err = mOMX->setParameter(
             mNode, OMX_IndexParamVideoMpeg4, &mpeg4type, sizeof(mpeg4type));
     CHECK_EQ(err, (status_t)OK);
@@ -1415,12 +1436,14 @@ status_t OMXCodec::setupAVCEncoderParameters(const sp<MetaData>& meta) {
     h264type.eProfile = static_cast<OMX_VIDEO_AVCPROFILETYPE>(profileLevel.mProfile);
     h264type.eLevel = static_cast<OMX_VIDEO_AVCLEVELTYPE>(profileLevel.mLevel);
 
+#ifndef QCOM_HARDWARE
     // XXX
     if (h264type.eProfile != OMX_VIDEO_AVCProfileBaseline) {
         ALOGW("Use baseline profile instead of %d for AVC recording",
             h264type.eProfile);
         h264type.eProfile = OMX_VIDEO_AVCProfileBaseline;
     }
+#endif
 
     if (h264type.eProfile == OMX_VIDEO_AVCProfileBaseline) {
         h264type.nSliceHeaderSpacing = 0;
@@ -1440,6 +1463,16 @@ status_t OMXCodec::setupAVCEncoderParameters(const sp<MetaData>& meta) {
         h264type.bDirectSpatialTemporal = OMX_FALSE;
         h264type.nCabacInitIdc = 0;
     }
+
+#ifdef QCOM_HARDWARE
+    if (h264type.eProfile > OMX_VIDEO_AVCProfileBaseline) {
+      h264type.nAllowedPictureTypes |= OMX_VIDEO_PictureTypeB;
+      h264type.nPFrames = setPFramesSpacing(iFramesInterval, frameRate);
+      h264type.nBFrames = 1;
+      h264type.nPFrames /= (h264type.nBFrames + 1);
+      mNumBFrames = h264type.nBFrames;
+    }
+#endif
 
     if (h264type.nBFrames != 0) {
         h264type.nAllowedPictureTypes |= OMX_VIDEO_PictureTypeB;
@@ -1649,7 +1682,8 @@ OMXCodec::OMXCodec(
 #ifdef QCOM_HARDWARE
       ,mThumbnailMode(false),
       mSPSParsed(false),
-      mUseArbitraryMode(true) 
+      mUseArbitraryMode(true),
+      mNumBFrames(0) 
 #endif
 {
 
@@ -2309,10 +2343,19 @@ status_t OMXCodec::allocateOutputBuffersFromNativeWindow() {
         cancelEnd = def.nBufferCountActual;
     }
 
-    for (OMX_U32 i = cancelStart; i < cancelEnd; i++) {
-        BufferInfo *info = &mPortBuffers[kPortIndexOutput].editItemAt(i);
-        cancelBufferToNativeWindow(info);
+#ifdef QCOM_HARDWARE
+    if (err != 0 &&
+        ((mState == LOADED) || (mState == LOADED_TO_IDLE))) {
+        freeBuffersOnPort(kPortIndexOutput);
+    } else {
+#endif
+        for (OMX_U32 i = cancelStart; i < cancelEnd; i++) {
+            BufferInfo *info = &mPortBuffers[kPortIndexOutput].editItemAt(i);
+            cancelBufferToNativeWindow(info);
+        }
+#ifdef QCOM_HARDWARE
     }
+#endif
 
     return err;
 }
@@ -3448,7 +3491,10 @@ void OMXCodec::drainInputBuffers() {
             }
 
             if (mFlags & kOnlySubmitOneInputBufferAtOneTime) {
-                break;
+#ifdef QCOM_HARDWARE
+                if (i == mNumBFrames)
+#endif
+                    break;
             }
         }
     }
