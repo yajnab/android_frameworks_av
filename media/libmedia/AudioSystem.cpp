@@ -848,6 +848,11 @@ extern "C" bool _ZN7android11AudioSystem15isLowVisibilityENS0_11stream_typeE(aud
     }
 }
 
+extern "C" bool _ZN7android11AudioSystem10stopOutputEiNS0_11stream_typeEi(audio_io_handle_t output, audio_stream_type_t stream, int session)
+{
+    return AudioSystem::stopOutput(output, stream, session);
+}
+
 #endif // AUDIO_LEGACY
 
 }; // namespace android
