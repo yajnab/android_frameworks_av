@@ -1009,6 +1009,13 @@ status_t AwesomePlayer::play_l() {
         }
     }
 
+#ifdef QCOM_HARDWARE
+    if(mBufferingDone) {
+        mBufferingDone = false;
+        postBufferingEvent_l();
+    }
+#endif
+
     modifyFlags(PLAYING, SET);
     modifyFlags(FIRST_FRAME, SET);
 
@@ -1521,6 +1528,12 @@ status_t AwesomePlayer::seekTo(int64_t timeUs) {
 }
 
 status_t AwesomePlayer::seekTo_l(int64_t timeUs) {
+#ifdef QCOM_HARDWARE
+    if(mBufferingDone) {
+        mBufferingDone = false;
+        postBufferingEvent_l();
+    }
+#endif
     if (mFlags & CACHE_UNDERRUN) {
         modifyFlags(CACHE_UNDERRUN, CLEAR);
         play_l();
@@ -1658,25 +1671,16 @@ status_t AwesomePlayer::initAudioDecoder() {
         int64_t durationUs;
         uint32_t flags = 0;
         char lpaDecode[128];
-        char audioDecoderOverrideCheck[128];
         property_get("lpa.decode",lpaDecode,"0");
-        property_get("audio.decoder_override_check",audioDecoderOverrideCheck,"0");
         if (mAudioTrack->getFormat()->findInt64(kKeyDuration, &durationUs)) {
             if (mDurationUs < 0 || durationUs > mDurationUs) {
                 mDurationUs = durationUs;
             }
         }
-        if ((LPAPlayer::mLpaInProgress == true) && (strcmp("true",audioDecoderOverrideCheck) == 0)) {
-            flags |= OMXCodec::kSoftwareCodecsOnly;
-            LPAPlayer::mLpaInProgress = false;
-        }
         if ((!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_MPEG) || !strcasecmp(mime,MEDIA_MIMETYPE_AUDIO_AAC))
              && LPAPlayer::objectsAlive == 0 && mVideoSource == NULL && (strcmp("true",lpaDecode) == 0)) {
 
             flags |= OMXCodec::kSoftwareCodecsOnly;
-            if(mDurationUs > 60000000) {
-               LPAPlayer::mLpaInProgress = true;
-            }
         }
 #endif
         mAudioSource = OMXCodec::Create(
@@ -1936,10 +1940,13 @@ void AwesomePlayer::onVideoEvent() {
                 mAudioPlayer->pause();
 
                 modifyFlags(AUDIO_RUNNING, CLEAR);
-            }
-            mAudioSource->pause();
 #ifdef QCOM_HARDWARE
-            mAudioSourcePaused = true;
+                mAudioSource->pause();
+                mAudioSourcePaused = true;
+#endif
+            }
+#ifndef QCOM_HARDWARE
+            mAudioSource->pause();
 #endif
         }
     }
