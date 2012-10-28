@@ -64,7 +64,12 @@ Copyright (c) 2012, Code Aurora Forum. All rights reserved.
 
 #include <cutils/properties.h>
 
+#ifdef QCOM_LEGACY_OMX
+// Disable rendering directly to NativeWindow
+#define USE_SURFACE_ALLOC 0
+#else
 #define USE_SURFACE_ALLOC 1
+#endif
 #define FRAME_DROP_FREQ 0
 
 namespace android {
