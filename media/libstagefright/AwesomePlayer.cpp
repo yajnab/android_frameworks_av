@@ -70,6 +70,7 @@ Copyright (c) 2012, Code Aurora Forum. All rights reserved.
 #else
 #define USE_SURFACE_ALLOC 1
 #endif
+#define USE_SURFACE_ALLOC 1
 #define FRAME_DROP_FREQ 0
 
 namespace android {
