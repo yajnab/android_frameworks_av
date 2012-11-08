@@ -45,6 +45,12 @@ public:
         SEEK_COMPLETE
     };
 
+    enum {
+        TRACK_DIRECT,
+        TRACK_REGULAR,
+        TRACK_NONE
+    };
+
     LPAPlayer(const sp<MediaPlayerBase::AudioSink> &audioSink, bool &initCheck,
                 AwesomePlayer *audioObserver = NULL);
 
@@ -87,8 +93,11 @@ private:
     int32_t mSampleRate;
     int64_t mLatencyUs;
     size_t mFrameSize;
+    int64_t mTimeStarted;
+    int64_t mTimePlayed;
     int64_t mNumFramesPlayed;
     int64_t mNumFramesPlayedSysTimeUs;
+    int64_t mNumA2DPBytesPlayed;
 
     void clearPowerManager();
 
@@ -117,9 +126,6 @@ private:
     sp<IBinder>             mWakeLockToken;
     sp<PMDeathRecipient>    mDeathRecipient;
 
-
-
-
     pthread_t decoderThread;
 
     pthread_t A2DPNotificationThread;
@@ -141,6 +147,7 @@ private:
 
     pthread_mutex_t decoder_mutex;
 
+    pthread_mutex_t audio_sink_setup_mutex;
 
     pthread_mutex_t a2dp_notification_mutex;
 
@@ -201,9 +208,8 @@ private:
 
     MediaBuffer *mInputBuffer;
 
-
-    Mutex pmLock;
     Mutex mLock;
+    Mutex mResumeLock;
 
     bool mSeeking;
     bool mReachedEOS;
@@ -223,6 +229,7 @@ private:
 
     sp<MediaPlayerBase::AudioSink> mAudioSink;
     AwesomePlayer *mObserver;
+    int mTrackType;
 
     static size_t AudioSinkCallback(
         MediaPlayerBase::AudioSink *audioSink,
@@ -242,6 +249,12 @@ private:
     int64_t getRealTimeUsLocked();
 
     void reset();
+
+    status_t setupAudioSink();
+    static size_t AudioCallback(
+        MediaPlayerBase::AudioSink *audioSink,
+        void *buffer, size_t size, void *cookie);
+    size_t AudioCallback(void *cookie, void *data, size_t size);
 
     LPAPlayer(const LPAPlayer &);
     LPAPlayer &operator=(const LPAPlayer &);

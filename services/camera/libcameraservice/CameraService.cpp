@@ -21,6 +21,8 @@
 #include <stdio.h>
 #include <sys/types.h>
 #include <pthread.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 #include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>
@@ -65,6 +67,23 @@ static int getCallingUid() {
 }
 
 // ----------------------------------------------------------------------------
+
+#if defined(BOARD_HAVE_HTC_FFC)
+#define HTC_SWITCH_CAMERA_FILE_PATH "/sys/android_camera2/htcwc"
+static void htcCameraSwitch(int cameraId)
+{
+    char buffer[16];
+    int fd;
+
+    if (access(HTC_SWITCH_CAMERA_FILE_PATH, W_OK) == 0) {
+        snprintf(buffer, sizeof(buffer), "%d", cameraId);
+
+        fd = open(HTC_SWITCH_CAMERA_FILE_PATH, O_WRONLY);
+        write(fd, buffer, strlen(buffer));
+        close(fd);
+    }
+}
+#endif
 
 // This is ugly and only safe if we never re-create the CameraService, but
 // should be ok for now.
@@ -156,6 +175,10 @@ sp<ICamera> CameraService::connect(
         ALOGI("Camera is disabled. connect X (pid %d) rejected", callingPid);
         return NULL;
     }
+
+#if defined(BOARD_HAVE_HTC_FFC)
+    htcCameraSwitch(cameraId);
+#endif
 
     Mutex::Autolock lock(mServiceLock);
     if (mClient[cameraId] != 0) {
@@ -305,14 +328,13 @@ void CameraService::loadSound() {
     if (mSoundRef++) return;
 
     char value[PROPERTY_VALUE_MAX];
-    property_get("persist.camera.shutter.disable", value, "0");
-    int disableSound = atoi(value);
+    property_get("persist.sys.camera-sound", value, "1");
+    int enableSound = atoi(value);
 
-    if(!disableSound) {
+    if(enableSound) {
         mSoundPlayer[SOUND_SHUTTER] = newMediaPlayer("/system/media/audio/ui/camera_click.ogg");
         mSoundPlayer[SOUND_RECORDING] = newMediaPlayer("/system/media/audio/ui/VideoRecord.ogg");
-    }
-    else {
+    } else {
         mSoundPlayer[SOUND_SHUTTER] = NULL;
         mSoundPlayer[SOUND_RECORDING] = NULL;
     }
@@ -369,7 +391,10 @@ CameraService::Client::Client(const sp<CameraService>& cameraService,
     // Enable zoom, error, focus, and metadata messages by default
     enableMsgType(CAMERA_MSG_ERROR | CAMERA_MSG_ZOOM | CAMERA_MSG_FOCUS
 #ifndef QCOM_HARDWARE
-                  | CAMERA_MSG_PREVIEW_METADATA
+                  | CAMERA_MSG_PREVIEW_METADATA 
+#ifndef OMAP_ICS_CAMERA
+                  | CAMERA_MSG_FOCUS_MOVE
+#endif
 #endif
                   );
 
@@ -530,7 +555,9 @@ void CameraService::Client::disconnect() {
     // Release the held ANativeWindow resources.
     if (mPreviewWindow != 0) {
 #ifdef QCOM_HARDWARE
+#ifndef NO_UPDATE_PREVIEW
         mHardware->setPreviewWindow(0);
+#endif
 #endif
         disconnectWindow(mPreviewWindow);
         mPreviewWindow = 0;
@@ -560,14 +587,6 @@ status_t CameraService::Client::setPreviewWindow(const sp<IBinder>& binder,
         return NO_ERROR;
     }
 
-#ifdef QCOM_HARDWARE
-    // We've raised the max on QCOM targets, but use less for camera.
-    if (window != 0) {
-        result = window.get()->perform(window.get(),
-                        NATIVE_WINDOW_SET_MIN_UNDEQUEUED_BUFFER_COUNT, 2);
-    }
-#endif
-
     if (window != 0) {
         result = native_window_api_connect(window.get(), NATIVE_WINDOW_API_CAMERA);
         if (result != NO_ERROR) {
@@ -586,8 +605,10 @@ status_t CameraService::Client::setPreviewWindow(const sp<IBinder>& binder,
             result = mHardware->setPreviewWindow(window);
         }
 #ifdef QCOM_HARDWARE
+#ifndef NO_UPDATE_PREVIEW
     } else {
         result = mHardware->setPreviewWindow(window);
+#endif
 #endif
     }
 
@@ -704,6 +725,11 @@ status_t CameraService::Client::startPreviewMode() {
         native_window_set_buffers_transform(mPreviewWindow.get(),
                 mOrientation);
     }
+
+#if defined(OMAP_ICS_CAMERA) || defined(OMAP_ENHANCEMENT_BURST_CAPTURE)
+    disableMsgType(CAMERA_MSG_COMPRESSED_BURST_IMAGE);
+#endif
+
     mHardware->setPreviewWindow(mPreviewWindow);
     result = mHardware->startPreview();
 
@@ -747,6 +773,16 @@ void CameraService::Client::stopPreview() {
     Mutex::Autolock lock(mLock);
     if (checkPidAndHardware() != NO_ERROR) return;
 
+#ifdef OMAP_ENHANCEMENT
+    // According to framework documentation, preview needs
+    // to be started for image capture. This will make sure
+    // that image capture related messages get disabled if
+    // not done already in their respective handlers.
+    // If these messages come when in the midddle of
+    // stopping preview we will deadlock the system in
+    // lockIfMessageWanted().
+    disableMsgType(CAMERA_MSG_POSTVIEW_FRAME);
+#endif
 
     disableMsgType(CAMERA_MSG_PREVIEW_FRAME);
     mHardware->stopPreview();
@@ -855,8 +891,14 @@ status_t CameraService::Client::takePicture(int msgType) {
                         CAMERA_MSG_POSTVIEW_FRAME |
                         CAMERA_MSG_RAW_IMAGE |
                         CAMERA_MSG_RAW_IMAGE_NOTIFY |
+#if defined(OMAP_ICS_CAMERA) || defined(OMAP_ENHANCEMENT_BURST_CAPTURE)
+                        CAMERA_MSG_RAW_BURST |
+#endif
                         CAMERA_MSG_COMPRESSED_IMAGE);
 
+#if defined(OMAP_ICS_CAMERA) || defined(OMAP_ENHANCEMENT_BURST_CAPTURE)
+        picMsgType |= CAMERA_MSG_COMPRESSED_BURST_IMAGE;
+#endif
     }
 #ifdef QCOM_HARDWARE
     disableMsgType(CAMERA_MSG_PREVIEW_METADATA);
@@ -1136,6 +1178,11 @@ void CameraService::Client::dataCallback(int32_t msgType,
         case CAMERA_MSG_COMPRESSED_IMAGE:
             client->handleCompressedPicture(dataPtr);
             break;
+#if defined(OMAP_ICS_CAMERA) || defined(OMAP_ENHANCEMENT_BURST_CAPTURE)
+        case CAMERA_MSG_COMPRESSED_BURST_IMAGE:
+            client->handleCompressedBurstPicture(dataPtr);
+            break;
+#endif
         default:
             client->handleGenericData(msgType, dataPtr, metadata);
             break;
@@ -1176,7 +1223,9 @@ void CameraService::Client::handleShutter(void) {
         c->notifyCallback(CAMERA_MSG_SHUTTER, 0, 0);
         if (!lockIfMessageWanted(CAMERA_MSG_SHUTTER)) return;
     }
+#ifndef SAMSUNG_CAMERA_QCOM
     disableMsgType(CAMERA_MSG_SHUTTER);
+#endif
 
     mLock.unlock();
 }
@@ -1273,6 +1322,20 @@ void CameraService::Client::handleCompressedPicture(const sp<IMemory>& mem) {
     }
 }
 
+#if defined(OMAP_ICS_CAMERA) || defined(OMAP_ENHANCEMENT_BURST_CAPTURE)
+// burst picture callback - compressed picture ready
+void CameraService::Client::handleCompressedBurstPicture(const sp<IMemory>& mem) {
+    // Don't disable this message type yet. In this mode takePicture() will
+    // get called only once. When burst finishes this message will get automatically
+    // disabled in the respective call for restarting the preview.
+
+    sp<ICameraClient> c = mCameraClient;
+    mLock.unlock();
+    if (c != 0) {
+        c->dataCallback(CAMERA_MSG_COMPRESSED_IMAGE, mem, NULL);
+    }
+}
+#endif
 
 void CameraService::Client::handleGenericNotify(int32_t msgType,
     int32_t ext1, int32_t ext2) {
@@ -1353,7 +1416,7 @@ int CameraService::Client::getOrientation(int degrees, bool mirror) {
         } else if (degrees == 180) {  // FLIP_H and ROT_180
             return HAL_TRANSFORM_FLIP_V;
         } else if (degrees == 270) {  // FLIP_H and ROT_270
-            return HAL_TRANSFORM_FLIP_V | HAL_TRANSFORM_ROT_90;
+            return HAL_TRANSFORM_FLIP_H | HAL_TRANSFORM_ROT_90;
         }
     }
     ALOGE("Invalid setDisplayOrientation degrees=%d", degrees);

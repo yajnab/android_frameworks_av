@@ -1009,6 +1009,13 @@ status_t AwesomePlayer::play_l() {
         }
     }
 
+#ifdef QCOM_HARDWARE
+    if(mBufferingDone) {
+        mBufferingDone = false;
+        postBufferingEvent_l();
+    }
+#endif
+
     modifyFlags(PLAYING, SET);
     modifyFlags(FIRST_FRAME, SET);
 
@@ -1521,6 +1528,12 @@ status_t AwesomePlayer::seekTo(int64_t timeUs) {
 }
 
 status_t AwesomePlayer::seekTo_l(int64_t timeUs) {
+#ifdef QCOM_HARDWARE
+    if(mBufferingDone) {
+        mBufferingDone = false;
+        postBufferingEvent_l();
+    }
+#endif
     if (mFlags & CACHE_UNDERRUN) {
         modifyFlags(CACHE_UNDERRUN, CLEAR);
         play_l();
@@ -1664,8 +1677,7 @@ status_t AwesomePlayer::initAudioDecoder() {
                 mDurationUs = durationUs;
             }
         }
-        if ( mDurationUs > 60000000
-             && (!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_MPEG) || !strcasecmp(mime,MEDIA_MIMETYPE_AUDIO_AAC))
+        if ((!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_MPEG) || !strcasecmp(mime,MEDIA_MIMETYPE_AUDIO_AAC))
              && LPAPlayer::objectsAlive == 0 && mVideoSource == NULL && (strcmp("true",lpaDecode) == 0)) {
 
             flags |= OMXCodec::kSoftwareCodecsOnly;
@@ -1873,6 +1885,9 @@ void AwesomePlayer::finishSeekIfNecessary(int64_t videoTimeUs) {
 void AwesomePlayer::onVideoEvent() {
     ATRACE_CALL();
     Mutex::Autolock autoLock(mLock);
+#ifdef QCOM_HARDWARE
+    int mAudioSourcePaused = false;
+#endif
     if (!mVideoEventPending) {
         // The event has been cancelled in reset_l() but had already
         // been scheduled for execution at that time.
@@ -1925,8 +1940,14 @@ void AwesomePlayer::onVideoEvent() {
                 mAudioPlayer->pause();
 
                 modifyFlags(AUDIO_RUNNING, CLEAR);
+#ifdef QCOM_HARDWARE
+                mAudioSource->pause();
+                mAudioSourcePaused = true;
+#endif
             }
+#ifndef QCOM_HARDWARE
             mAudioSource->pause();
+#endif
         }
     }
 
@@ -1968,6 +1989,12 @@ void AwesomePlayer::onVideoEvent() {
                 }
                 finishSeekIfNecessary(-1);
 
+#ifdef QCOM_HARDWARE
+                if (mAudioSourcePaused) {
+                    mAudioSource->start();
+                    mAudioSourcePaused = false;
+                }
+#endif
                 if (mAudioPlayer != NULL
                         && !(mFlags & (AUDIO_RUNNING | SEEK_PREVIEW))) {
                     startAudioPlayer_l();
@@ -2027,6 +2054,12 @@ void AwesomePlayer::onVideoEvent() {
     SeekType wasSeeking = mSeeking;
     finishSeekIfNecessary(timeUs);
 
+#ifdef QCOM_HARDWARE
+    if (mAudioSourcePaused) {
+        mAudioSource->start();
+        mAudioSourcePaused = false;
+    }
+#endif
     if (mAudioPlayer != NULL && !(mFlags & (AUDIO_RUNNING | SEEK_PREVIEW))) {
         status_t err = startAudioPlayer_l();
         if (err != OK) {
@@ -2150,8 +2183,10 @@ void AwesomePlayer::onVideoEvent() {
                 Mutex::Autolock autoLock(mStatsLock);
                 mStats.mConsecutiveFramesDropped = 0;
             }
-#endif
+            postVideoEvent_l(kVideoEarlyMarginUs - latenessUs);
+#else
             postVideoEvent_l(10000);
+#endif
             return;
         }
     }

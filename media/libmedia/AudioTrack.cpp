@@ -214,12 +214,13 @@ AudioTrack::~AudioTrack()
         // it is looping on buffer full condition in obtainBuffer().
         // Otherwise the callback thread will never exit.
         stop();
-#ifdef QCOM_HARDWARE
+
         if (mAudioTrackThread != 0) {
             mAudioTrackThread->requestExit();   // see comment in AudioTrack.h
             mAudioTrackThread->requestExitAndWait();
             mAudioTrackThread.clear();
         }
+#ifdef QCOM_HARDWARE
         if (mAudioTrack != 0) {
             mAudioTrack.clear();
             AudioSystem::releaseAudioSessionId(mSessionId);
@@ -354,7 +355,7 @@ status_t AudioTrack::set(
             return NO_INIT;
         }
         mAudioFlinger = audioFlinger;
-        status_t status;
+        status_t status = NO_ERROR;
         mAudioDirectOutput = output;
         mDirectTrack = audioFlinger->createDirectTrack( getpid(),
                                                         sampleRate,
@@ -366,6 +367,7 @@ status_t AudioTrack::set(
                                                         &status);
         if(status != NO_ERROR) {
             ALOGE("createDirectTrack returned with status %d", status);
+            return status;
         }
         mAudioTrack = NULL;
         mSharedBuffer = NULL;
@@ -917,6 +919,11 @@ audio_io_handle_t AudioTrack::getOutput_l()
 int AudioTrack::getSessionId() const
 {
     return mSessionId;
+}
+
+extern "C" int _ZNK7android10AudioTrack12getSessionIdEv();
+extern "C" int _ZN7android10AudioTrack12getSessionIdEv() {
+    return _ZNK7android10AudioTrack12getSessionIdEv();
 }
 
 status_t AudioTrack::attachAuxEffect(int effectId)
