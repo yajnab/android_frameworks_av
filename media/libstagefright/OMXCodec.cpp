@@ -804,6 +804,10 @@ status_t OMXCodec::configureCodec(const sp<MetaData> &meta) {
             status_t err = mOMX->getExtensionIndex(
                 mNode, OMX_QCOM_INDEX_PARAM_VIDEO_SYNCFRAMEDECODINGMODE, &indexType);
 
+#ifdef QCOM_LEGACY_OMX
+            // Don't run this check with the legacy encoder
+            if (strncmp(mComponentName, "OMX.qcom.video.encoder.", 23))
+#endif
             CHECK_EQ(err, (status_t)OK);
 
             enableType.bEnable = OMX_TRUE;
