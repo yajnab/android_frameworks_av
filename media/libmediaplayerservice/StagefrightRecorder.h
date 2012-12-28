@@ -137,6 +137,9 @@ private:
         sp<MetaData> *meta);
     status_t startMPEG4Recording();
     status_t startAMRRecording();
+#ifdef QCOM_FM_ENABLED
+    status_t startFMA2DPWriter();
+#endif
     status_t startAACRecording();
     status_t startWAVERecording();
     status_t startRawAudioRecording();
