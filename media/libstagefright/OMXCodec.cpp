@@ -4289,6 +4289,7 @@ status_t OMXCodec::start(MetaData *meta) {
             CODEC_LOGE("init failed: %d", err);
             return err;
         }
+        ALOGV("component started!");
 
         params->setInt32(kKeyNumBuffers, mPortBuffers[kPortIndexInput].size());
         err = mSource->start(params.get());
@@ -4311,7 +4312,15 @@ status_t OMXCodec::stop() {
     CODEC_LOGV("stop mState=%d", mState);
     Mutex::Autolock autoLock(mLock);
     status_t err = stopOmxComponent_l();
+    ALOGV("component stopped!");
     mSource->stop();
+    //clear the decodingtime list
+    List<int64_t >::iterator it;
+    while (!mDecodingTimeList.empty()) {
+        it = mDecodingTimeList.begin();
+        mDecodingTimeList.erase(it);
+    }
+    //end
 
     CODEC_LOGV("stopped in state %d", mState);
     return err;
