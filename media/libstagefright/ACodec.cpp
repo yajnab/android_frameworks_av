@@ -2412,9 +2412,11 @@ void ACodec::sendFormatChange(const sp<AMessage> &reply) {
                             rect.nTop,
                             rect.nLeft + rect.nWidth,
                             rect.nTop + rect.nHeight);
+#ifdef QCOM_BSP
                     reply->setInt32(
                             "color-format",
                             (int)(videoDef->eColorFormat));
+#endif
                 }
             }
             break;
@@ -3270,6 +3272,7 @@ void ACodec::BaseState::onOutputBufferDrained(const sp<AMessage> &msg) {
     android_native_rect_t crop;
     if (msg->findRect("crop",
             &crop.left, &crop.top, &crop.right, &crop.bottom)) {
+#ifdef QCOM_BSP
         if (mCodec->mInSmoothStreamingMode) {
             OMX_COLOR_FORMATTYPE eColorFormat = OMX_COLOR_FormatUnused;
             CHECK(msg->findInt32("color-format", (int32_t*)&eColorFormat));
@@ -3277,6 +3280,7 @@ void ACodec::BaseState::onOutputBufferDrained(const sp<AMessage> &msg) {
                     mCodec->mNativeWindow.get(), crop.right,
                     crop.bottom, eColorFormat);
         }
+#endif
         CHECK_EQ(0, native_window_set_crop(
                 mCodec->mNativeWindow.get(), &crop));
     }
