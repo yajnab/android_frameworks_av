@@ -58,6 +58,7 @@
 #include <unistd.h>
 
 #include "QCUtils.h"
+#include "ResourceManager.h"
 
 #include <system/audio.h>
 #ifdef ENABLE_QC_AV_ENHANCEMENTS
@@ -89,11 +90,18 @@ StagefrightRecorder::StagefrightRecorder()
       mCaptureTimeLapse(false) {
 
     ALOGV("Constructor");
+
+    mUseCase = "";
+    mUseCaseFlag =  false;
+
     reset();
 }
 
 StagefrightRecorder::~StagefrightRecorder() {
     ALOGV("Destructor");
+
+    ResourceManager::AudioConcurrencyInfo::resetParameter(mUseCase, mUseCaseFlag);
+
     stop();
 }
 
@@ -971,12 +979,14 @@ sp<MediaSource> StagefrightRecorder::createAudioSource() {
             encMeta->setInt32(kKeyAACProfile, OMX_AUDIO_AACObjectELD);
             break;
 #ifdef ENABLE_QC_AV_ENHANCEMENTS
+#ifndef RESOURCE_MANAGER
         case AUDIO_ENCODER_EVRC:
             mime = MEDIA_MIMETYPE_AUDIO_EVRC;
             break;
         case AUDIO_ENCODER_QCELP:
             mime = MEDIA_MIMETYPE_AUDIO_QCELP;
             break;
+#endif
 #endif
 
         default:
@@ -1020,6 +1030,14 @@ sp<MediaSource> StagefrightRecorder::createAudioSource() {
     if (audioEncoder == NULL) {
         ALOGD("No encoder is needed, use the AudioSource directly as the MediaSource for LPCM format");
         audioEncoder = audioSource;
+
+        mUseCase = "USECASE_PCM_RECORDING";
+        status_t err = OK;
+        err = ResourceManager::AudioConcurrencyInfo::setNonCodecParameter(
+                 mUseCase, mUseCaseFlag);
+        if(err != OK) {
+            return NULL;
+        }
     }
     if (mAudioSourceNode != NULL) {
         mAudioSourceNode.clear();
@@ -1668,6 +1686,7 @@ status_t StagefrightRecorder::setupVideoEncoder(
     if (mCaptureTimeLapse) {
         encoder_flags |= OMXCodec::kOnlySubmitOneInputBufferAtOneTime;
     }
+    encoder_flags |= QCUtils::getEncoderTypeFlags();
 
     sp<MediaSource> encoder = OMXCodec::Create(
             client.interface(), enc_meta,

@@ -31,6 +31,9 @@
 #include <utils/StrongPointer.h>
 #include <media/Metadata.h>
 #include <media/stagefright/MediaSource.h>
+#include <media/stagefright/foundation/AString.h>
+#include <media/stagefright/MediaCodecList.h>
+
 #include <media/MediaRecorderBase.h>
 #include <media/stagefright/MediaExtractor.h>
 #include <camera/CameraParameters.h>
@@ -101,19 +104,31 @@ struct QCUtils {
                 int32_t &videoEncoderProfile);
 
         static bool isSmoothStreamingEnabled();
+
+        static int64_t getMaxAVSyncLateMargin();
     };
 
     //set B frames for MPEG4
-    static void setBFrames(OMX_VIDEO_PARAM_MPEG4TYPE &mpeg4type, bool &numBFrames);
+    static void setBFrames(OMX_VIDEO_PARAM_MPEG4TYPE &mpeg4type, bool &numBFrames, char* componentName);
 
     //set B frames for H264
     static void setBFrames(OMX_VIDEO_PARAM_AVCTYPE &h264type, bool &numBFrames,
-            int32_t iFramesInterval, int32_t frameRate);
+            int32_t iFramesInterval, int32_t frameRate, char* componentName);
 
     static bool UseQCHWAACEncoder(audio_encoder Encoder,int32_t Channel,int32_t BitRate, int32_t SampleRate);
 
     static sp<MediaExtractor> MediaExtractor_CreateIfNeeded(sp<MediaExtractor> defaultExt,
               const sp<DataSource> &source, const char *mime);
+
+    //helper function to add media codecs with specific quirks
+    static void helper_addMediaCodec(Vector<MediaCodecList::CodecInfo> &mCodecInfos,
+                                     KeyedVector<AString, size_t> &mTypes,
+                                     bool encoder, const char *name,
+                                     const char *type, uint32_t quirks);
+
+    //helper function to calculate the value of quirks from strings
+    static uint32_t helper_getCodecSpecificQuirks(KeyedVector<AString, size_t> &mCodecQuirks,
+                                                  Vector<AString> quirks);
 
     static bool isAVCProfileSupported(int32_t profile);
 
@@ -122,6 +137,17 @@ struct QCUtils {
             OMX_U32 width, OMX_U32 height, OMX_COLOR_FORMATTYPE colorFormat);
 
     static bool checkIsThumbNailMode(const uint32_t flags, char* componentName);
+
+        //helper function for MPEG4 Extractor to check for AC3/EAC3 contents
+    static void helper_mpeg4extractor_checkAC3EAC3(MediaBuffer *buffer, sp<MetaData> &format,
+                                                   size_t size);
+
+    static void setArbitraryModeIfInterlaced(
+            const uint8_t *ptr, const sp<MetaData> &meta);
+
+    static int32_t checkIsInterlace(sp<MetaData> &meta);
+
+    static int32_t getEncoderTypeFlags();
 };
 
 }

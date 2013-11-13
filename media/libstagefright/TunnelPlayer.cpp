@@ -36,6 +36,9 @@
 #include <media/stagefright/MediaSource.h>
 #include <media/stagefright/MetaData.h>
 #include <media/stagefright/MediaErrors.h>
+#ifdef ENABLE_QC_AV_ENHANCEMENTS
+#include <QCMediaDefs.h>
+#endif
 #include "include/AwesomePlayer.h"
 #include <cutils/properties.h>
 
@@ -174,7 +177,17 @@ status_t TunnelPlayer::start(bool sourceAlreadyStarted) {
     else if (!strcasecmp(mime,MEDIA_MIMETYPE_AUDIO_MPEG)) {
         mFormat = AUDIO_FORMAT_MP3;
         ALOGD("TunnelPlayer::start AUDIO_FORMAT_MP3");
-    } else {
+    }
+#ifdef ENABLE_QC_AV_ENHANCEMENTS
+    else if (!strcasecmp(mime,MEDIA_MIMETYPE_AUDIO_AC3)) {
+        mFormat = AUDIO_FORMAT_AC3;
+        ALOGV("TunnelPlayer::start AUDIO_FORMAT_AC3");
+    } else if (!strcasecmp(mime,MEDIA_MIMETYPE_AUDIO_EAC3)) {
+        mFormat = AUDIO_FORMAT_EAC3;
+        ALOGV("TunnelPlayer::start AUDIO_FORMAT_EAC3");
+    }
+#endif
+    else {
         ALOGE("TunnelPlayer::UNSUPPORTED");
     }
 

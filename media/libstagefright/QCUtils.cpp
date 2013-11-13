@@ -44,12 +44,16 @@
 
 #include "include/QCUtils.h"
 
+static const int64_t kDefaultAVSyncLateMargin =  40000;
+static const int64_t kMaxAVSyncLateMargin     = 250000;
+
 #if defined(ENABLE_QC_AV_ENHANCEMENTS) || defined(QCOM_LEGACY_MMPARSER)
 
 #include <QCMetaData.h>
 #include <QCMediaDefs.h>
 
 #include "include/ExtendedExtractor.h"
+#include "include/avc_utils.h"
 
 namespace android {
 
@@ -90,7 +94,7 @@ status_t QCUtils::HFR::reCalculateFileDuration(
     CHECK(meta->findInt32(kKeyWidth, &width));
     CHECK(meta->findInt32(kKeyHeight, &height));
 
-    char mDeviceName[100];
+    char mDeviceName[PROPERTY_VALUE_MAX];
     property_get("ro.board.platform",mDeviceName,"0");
     if (!strncmp(mDeviceName, "msm7627a", 8)) {
         if (hfr && (width * height > 432*240)) {
@@ -202,6 +206,34 @@ void QCUtils::ShellProp::setEncoderprofile(
     }
 }
 
+int64_t QCUtils::ShellProp::getMaxAVSyncLateMargin() {
+    int64_t maxAVSyncRange = kDefaultAVSyncLateMargin;
+
+    char av_sync_late_margin[PROPERTY_VALUE_MAX];
+    //get value in ms and convert to uc
+    property_get("media.sf.set.late.margin", av_sync_late_margin, "0");
+    int64_t newLateMargin = atoi(av_sync_late_margin)* 1000;
+
+    if(newLateMargin > maxAVSyncRange) {
+        if( newLateMargin > kMaxAVSyncLateMargin ) {
+            //limit max late to kMaxAVSyncLateMargin
+            maxAVSyncRange = kMaxAVSyncLateMargin;
+            ALOGW("Range provide (%dms) is out of valid range, resetting to 250ms",
+                   newLateMargin/1000);
+        } else {
+            //set range is > kDefaultAVSyncLateMargin  and <= kMaxAVSyncLateMargin ms
+            maxAVSyncRange = newLateMargin;
+            ALOGW("setting new AV sync Range (%dms)",newLateMargin/1000);
+        }
+    } else {
+       if(newLateMargin > 0) {
+           ALOGW("Range set (%dms) is less than default, reseting value to default 40ms",
+                  newLateMargin/1000);
+       }
+    }
+    return maxAVSyncRange;
+}
+
 bool QCUtils::ShellProp::isSmoothStreamingEnabled() {
     char prop[PROPERTY_VALUE_MAX] = {0};
     property_get("mm.enable.smoothstreaming", prop, "0");
@@ -212,7 +244,10 @@ bool QCUtils::ShellProp::isSmoothStreamingEnabled() {
 }
 
 void QCUtils::setBFrames(
-        OMX_VIDEO_PARAM_MPEG4TYPE &mpeg4type, bool &numBFrames) {
+        OMX_VIDEO_PARAM_MPEG4TYPE &mpeg4type, bool &numBFrames, char* componentName) {
+    if (strncmp(componentName, "OMX.qcom.", 9) != 0) {
+        return;
+    }
     if (mpeg4type.eProfile > OMX_VIDEO_MPEG4ProfileSimple) {
         mpeg4type.nAllowedPictureTypes |= OMX_VIDEO_PictureTypeB;
         mpeg4type.nBFrames = 1;
@@ -224,7 +259,10 @@ void QCUtils::setBFrames(
 
 void QCUtils::setBFrames(
         OMX_VIDEO_PARAM_AVCTYPE &h264type, bool &numBFrames,
-        int32_t iFramesInterval, int32_t frameRate) {
+        int32_t iFramesInterval, int32_t frameRate, char* componentName) {
+    if (strncmp(componentName, "OMX.qcom.", 9) != 0) {
+        return;
+    }
     OMX_U32 val = 0;
     if (iFramesInterval < 0) {
         val =  0xFFFFFFFF;
@@ -305,32 +343,67 @@ bool QCUtils::UseQCHWAACEncoder(audio_encoder Encoder,int32_t Channel,int32_t Bi
     return ret;
 }
 
+
+//- returns NULL if we dont really need a new extractor (or cannot),
+//  valid extractor is returned otherwise
+//- caller needs to check for NULL
+//  ----------------------------------------
+//  defaultExt - the existing extractor
+//  source - file source
+//  mime - container mime
+//  ----------------------------------------
+//  Note: defaultExt will be deleted in this function if the new parser is selected
+
 sp<MediaExtractor> QCUtils::MediaExtractor_CreateIfNeeded(sp<MediaExtractor> defaultExt,
                                                             const sp<DataSource> &source,
                                                             const char *mime) {
     bool bCheckExtendedExtractor = false;
-    bool videoOnly = true;
-    bool amrwbAudio = false;
+    bool videoTrackFound         = false;
+    bool audioTrackFound         = false;
+    bool amrwbAudio              = false;
+    int  numOfTrack              = 0;
+
     if (defaultExt != NULL) {
-        for (size_t i = 0; i < defaultExt->countTracks(); ++i) {
-            sp<MetaData> meta = defaultExt->getTrackMetaData(i);
+        for (size_t trackItt = 0; trackItt < defaultExt->countTracks(); ++trackItt) {
+            ++numOfTrack;
+            sp<MetaData> meta = defaultExt->getTrackMetaData(trackItt);
             const char *_mime;
             CHECK(meta->findCString(kKeyMIMEType, &_mime));
 
             String8 mime = String8(_mime);
 
             if (!strncasecmp(mime.string(), "audio/", 6)) {
-                videoOnly = false;
+                audioTrackFound = true;
 
                 amrwbAudio = !strncasecmp(mime.string(),
                                           MEDIA_MIMETYPE_AUDIO_AMR_WB,
                                           strlen(MEDIA_MIMETYPE_AUDIO_AMR_WB));
                 if (amrwbAudio) {
-                  break;
+                    break;
                 }
+            }else if(!strncasecmp(mime.string(), "video/", 6)) {
+                videoTrackFound = true;
             }
         }
-        bCheckExtendedExtractor = videoOnly || amrwbAudio;
+
+        if(amrwbAudio) {
+            bCheckExtendedExtractor = true;
+        }else if (numOfTrack  == 0) {
+            bCheckExtendedExtractor = true;
+        } else if(numOfTrack == 1) {
+            if((videoTrackFound) ||
+                (!videoTrackFound && !audioTrackFound)){
+                bCheckExtendedExtractor = true;
+            }
+        } else if (numOfTrack >= 2){
+            if(videoTrackFound && audioTrackFound) {
+                if(amrwbAudio) {
+                    bCheckExtendedExtractor = true;
+                }
+            } else {
+                bCheckExtendedExtractor = true;
+            }
+        }
     } else {
         bCheckExtendedExtractor = true;
     }
@@ -340,20 +413,18 @@ sp<MediaExtractor> QCUtils::MediaExtractor_CreateIfNeeded(sp<MediaExtractor> def
         return defaultExt;
     }
 
-    sp<MediaExtractor> retextParser;
-
-    //Create Extended Extractor only if default extractor are not selected
+    //Create Extended Extractor only if default extractor is not selected
     ALOGD("Try creating ExtendedExtractor");
-    retextParser = ExtendedExtractor::Create(source, mime);
+    sp<MediaExtractor>  retExtExtractor = ExtendedExtractor::Create(source, mime);
 
-    if (retextParser == NULL) {
+    if (retExtExtractor == NULL) {
         ALOGD("Couldn't create the extended extractor, return default one");
         return defaultExt;
     }
 
     if (defaultExt == NULL) {
-        ALOGD("default one is NULL, return extended extractor");
-        return retextParser;
+        ALOGD("default extractor is NULL, return extended extractor");
+        return retExtExtractor;
     }
 
     //bCheckExtendedExtractor is true which means default extractor was found
@@ -365,11 +436,16 @@ sp<MediaExtractor> QCUtils::MediaExtractor_CreateIfNeeded(sp<MediaExtractor> def
     //to delete the new one
     bool bUseDefaultExtractor = true;
 
-    for (size_t i = 0; (i < retextParser->countTracks()); ++i) {
-        sp<MetaData> meta = retextParser->getTrackMetaData(i);
+    for (size_t trackItt = 0; (trackItt < retExtExtractor->countTracks()); ++trackItt) {
+        sp<MetaData> meta = retExtExtractor->getTrackMetaData(trackItt);
         const char *mime;
         bool success = meta->findCString(kKeyMIMEType, &mime);
-        if ((success == true) && !strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_AMR_WB_PLUS)) {
+        if ((success == true) &&
+            (!strncasecmp(mime, MEDIA_MIMETYPE_AUDIO_AMR_WB_PLUS,
+                                strlen(MEDIA_MIMETYPE_AUDIO_AMR_WB_PLUS)) ||
+             !strncasecmp(mime, MEDIA_MIMETYPE_VIDEO_HEVC,
+                                strlen(MEDIA_MIMETYPE_VIDEO_HEVC)) )) {
+
             ALOGD("Discarding default extractor and using the extended one");
             bUseDefaultExtractor = false;
             break;
@@ -378,12 +454,52 @@ sp<MediaExtractor> QCUtils::MediaExtractor_CreateIfNeeded(sp<MediaExtractor> def
 
     if (bUseDefaultExtractor) {
         ALOGD("using default extractor inspite of having a new extractor");
-        retextParser.clear();
+        retExtExtractor.clear();
         return defaultExt;
     } else {
         defaultExt.clear();
-        return retextParser;
+        return retExtExtractor;
     }
+
+}
+
+void QCUtils::helper_addMediaCodec(Vector<MediaCodecList::CodecInfo> &mCodecInfos,
+                                          KeyedVector<AString, size_t> &mTypes,
+                                          bool encoder, const char *name,
+                                          const char *type, uint32_t quirks) {
+    mCodecInfos.push();
+    MediaCodecList::CodecInfo *info = &mCodecInfos.editItemAt(mCodecInfos.size() - 1);
+    info->mName = name;
+    info->mIsEncoder = encoder;
+    info->mTypes = 0;
+    ssize_t index = mTypes.indexOfKey(type);
+    uint32_t bit;
+    if(index < 0)
+    {
+        bit = mTypes.size();
+        if (bit == 32) {
+            ALOGW("Too many distinct type names in configuration.");
+            return;
+        }
+        mTypes.add(name, bit);
+    } else {
+        bit = mTypes.valueAt(index);
+    }
+    info->mTypes |= 1ul << bit;
+    info->mQuirks = quirks;
+}
+
+uint32_t QCUtils::helper_getCodecSpecificQuirks(KeyedVector<AString, size_t> &mCodecQuirks,
+                                                       Vector<AString> quirks) {
+    size_t i = 0, numQuirks = quirks.size();
+    uint32_t bit = 0, value = 0;
+    for (i = 0; i < numQuirks; i++)
+    {
+        ssize_t index = mCodecQuirks.indexOfKey(quirks.itemAt(i));
+        bit = mCodecQuirks.valueAt(index);
+        value |= 1ul << bit;
+    }
+    return value;
 }
 
 bool QCUtils::isAVCProfileSupported(int32_t  profile){
@@ -416,8 +532,73 @@ bool QCUtils::checkIsThumbNailMode(const uint32_t flags, char* componentName) {
     return isInThumbnailMode;
 }
 
+
+void QCUtils::helper_mpeg4extractor_checkAC3EAC3(MediaBuffer *buffer,
+                                                        sp<MetaData> &format,
+                                                        size_t size) {
+    bool mMakeBigEndian = false;
+    const char *mime;
+
+    if (format->findCString(kKeyMIMEType, &mime)
+            && (!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_AC3) ||
+            !strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_EAC3))) {
+        mMakeBigEndian = true;
+    }
+    if (mMakeBigEndian && *((uint8_t *)buffer->data())==0x0b &&
+            *((uint8_t *)buffer->data()+1)==0x77 ) {
+        size_t count = 0;
+        for(count=0;count<size;count+=2) { // size is always even bytes in ac3/ec3 read
+            uint8_t tmp = *((uint8_t *)buffer->data() + count);
+            *((uint8_t *)buffer->data() + count) = *((uint8_t *)buffer->data()+count+1);
+            *((uint8_t *)buffer->data() + count+1) = tmp;
+        }
+    }
 }
 
+void QCUtils::setArbitraryModeIfInterlaced(
+        const uint8_t *ptr, const sp<MetaData> &meta) {
+
+    if (ptr == NULL) {
+        return;
+    }
+    uint16_t spsSize = (((uint16_t)ptr[6]) << 8) + (uint16_t)(ptr[7]);
+    int32_t width = 0, height = 0, isInterlaced = 0;
+    const uint8_t *spsStart = &ptr[8];
+
+    sp<ABuffer> seqParamSet = new ABuffer(spsSize);
+    memcpy(seqParamSet->data(), spsStart, spsSize);
+    FindAVCDimensions(seqParamSet, &width, &height, NULL, NULL, &isInterlaced);
+
+    ALOGV("height is %d, width is %d, isInterlaced is %d\n", height, width, isInterlaced);
+    if (isInterlaced) {
+        meta->setInt32(kKeyUseArbitraryMode, 1);
+        meta->setInt32(kKeyInterlace, 1);
+    }
+    return;
+}
+
+int32_t QCUtils::checkIsInterlace(sp<MetaData> &meta) {
+    int32_t isInterlaceFormat = 0;
+
+    if(meta->findInt32(kKeyInterlace, &isInterlaceFormat)) {
+        ALOGI("interlace format detected");
+    }
+
+    return isInterlaceFormat;
+}
+
+int32_t QCUtils::getEncoderTypeFlags() {
+    int32_t flags = 0;
+
+    char mDeviceName[PROPERTY_VALUE_MAX];
+    property_get("ro.board.platform",mDeviceName,"0");
+    if (!strncmp(mDeviceName, "msm8610", 7)) {
+        flags |= OMXCodec::kHardwareCodecsOnly;
+    }
+    return flags;
+}
+
+}
 #else //ENABLE_QC_AV_ENHANCEMENTS
 
 namespace android {
@@ -455,17 +636,21 @@ void QCUtils::ShellProp::setEncoderprofile(
         video_encoder &videoEncoder, int32_t &videoEncoderProfile) {
 }
 
+int64_t QCUtils::ShellProp::getMaxAVSyncLateMargin() {
+     return kDefaultAVSyncLateMargin;
+}
+
 bool QCUtils::ShellProp::isSmoothStreamingEnabled() {
     return false;
 }
 
 void QCUtils::setBFrames(
-        OMX_VIDEO_PARAM_MPEG4TYPE &mpeg4type, bool &numBFrames) {
+        OMX_VIDEO_PARAM_MPEG4TYPE &mpeg4type, bool &numBFrames, char* componentName) {
 }
 
 void QCUtils::setBFrames(
         OMX_VIDEO_PARAM_AVCTYPE &h264type, bool &numBFrames,
-        int32_t iFramesInterval, int32_t frameRate) {
+        int32_t iFramesInterval, int32_t frameRate, char* componentName) {
 }
 
 bool QCUtils::UseQCHWAACEncoder(audio_encoder Encoder,int32_t Channel,
@@ -479,6 +664,17 @@ sp<MediaExtractor> QCUtils::MediaExtractor_CreateIfNeeded(sp<MediaExtractor> def
                    return defaultExt;
 }
 
+void QCUtils::helper_addMediaCodec(Vector<MediaCodecList::CodecInfo> &mCodecInfos,
+                                          KeyedVector<AString, size_t> &mTypes,
+                                          bool encoder, const char *name,
+                                          const char *type, uint32_t quirks) {
+}
+
+uint32_t QCUtils::helper_getCodecSpecificQuirks(KeyedVector<AString, size_t> &mCodecQuirks,
+                                                       Vector<AString> quirks) {
+    return 0;
+}
+
 bool QCUtils::isAVCProfileSupported(int32_t  profile){
      return false;
 }
@@ -489,6 +685,23 @@ void QCUtils::updateNativeWindowBufferGeometry(ANativeWindow* anw,
 
 bool QCUtils::checkIsThumbNailMode(const uint32_t flags, char* componentName) {
     return false;
+}
+
+void QCUtils::helper_mpeg4extractor_checkAC3EAC3(MediaBuffer *buffer,
+                                                        sp<MetaData> &format,
+                                                        size_t size) {
+}
+
+void QCUtils::setArbitraryModeIfInterlaced(
+        const uint8_t *ptr, const sp<MetaData> &meta) {
+}
+
+int32_t QCUtils::checkIsInterlace(sp<MetaData> &meta) {
+    return false;
+}
+
+int32_t QCUtils::getEncoderTypeFlags() {
+    return 0;
 }
 
 }

@@ -31,6 +31,7 @@
 
 #include <private/media/AudioTrackShared.h>
 
+#include <media/AudioParameter.h>
 #include <media/AudioSystem.h>
 #include <media/AudioTrack.h>
 
@@ -47,6 +48,7 @@
 #include <system/audio_policy.h>
 
 #include <audio_utils/primitives.h>
+#include "TrackUtils.h"
 
 namespace android {
 // ---------------------------------------------------------------------------
@@ -177,6 +179,10 @@ AudioTrack::AudioTrack(
 AudioTrack::~AudioTrack()
 {
     ALOGV_IF(mSharedBuffer != 0, "Destructor sharedBuffer: %p", mSharedBuffer->pointer());
+    if(TrackUtils::SetConcurrencyParameterForRemotePlaybackSession(
+            mStreamType, mFormat, mFlags, false/*sesion active*/)) {
+        ALOGE("Reset concurency param failed");
+    }
 
     if (mStatus == NO_ERROR) {
         // Make sure that callback function exits in the case where
@@ -298,8 +304,15 @@ status_t AudioTrack::set(
          && (channelCount == 1)
          && ((sampleRate == 8000 || sampleRate == 16000)))
     {
-        ALOGD("Turn on Direct Output for VOIP RX");
-        flags = (audio_output_flags_t)(flags | AUDIO_OUTPUT_FLAG_VOIP_RX|AUDIO_OUTPUT_FLAG_DIRECT);
+        String8 valueStr = AudioSystem::getParameters((audio_io_handle_t)0,String8("VOIP_STREAM"));
+        AudioParameter result(valueStr);
+        int value;
+        if (result.getInt(String8("VOIP_STREAM"),value) == NO_ERROR) {
+            if(!value) {
+                ALOGD("Turn on Direct Output for VOIP RX");
+                flags = (audio_output_flags_t)(flags | AUDIO_OUTPUT_FLAG_VOIP_RX|AUDIO_OUTPUT_FLAG_DIRECT);
+            }
+        }
     }
 #endif
 
@@ -324,10 +337,14 @@ status_t AudioTrack::set(
     }
 #endif
 
+    //Check whether to force fast flag
+    audio_output_flags_t output_flags = flags;
+    TrackUtils::setFastFlag(streamType, output_flags);
+
     audio_io_handle_t output = AudioSystem::getOutput(
                                     streamType,
                                     sampleRate, format, channelMask,
-                                    flags);
+                                    output_flags);
 
     if (output == 0) {
         ALOGE("Could not get audio output for stream type %d", streamType);
@@ -344,6 +361,8 @@ status_t AudioTrack::set(
     mAuxEffectId = 0;
     mFlags = flags;
     mCbf = cbf;
+    mOutput = output;
+    mSampleRate = sampleRate;
 
 #ifdef QCOM_HARDWARE
     if (flags & AUDIO_OUTPUT_FLAG_LPA || flags & AUDIO_OUTPUT_FLAG_TUNNEL) {
@@ -377,7 +396,6 @@ status_t AudioTrack::set(
         mAudioTrackThread = new AudioTrackThread(*this, threadCanCallJava);
         mAudioTrackThread->run("AudioTrack", ANDROID_PRIORITY_AUDIO, 0 /*stack*/);
     }
-
     // create the IAudioTrack
     status_t status = createTrack_l(streamType,
                                   sampleRate,
@@ -420,10 +438,37 @@ status_t AudioTrack::set(
 #ifndef QCOM_HARDWARE
     AudioSystem::acquireAudioSessionId(mSessionId);
 #endif
+
+    if(TrackUtils::SetConcurrencyParameterForRemotePlaybackSession(
+            mStreamType, mFormat, mFlags, true/*sesion active*/)) {
+        ALOGE("Set concurency param failed");
+        return INVALID_OPERATION;
+    }
     return NO_ERROR;
 }
 
 // -------------------------------------------------------------------------
+
+uint32_t AudioTrack::latency() const
+{
+#ifdef QCOM_HARDWARE
+    if(mAudioDirectOutput != -1) {
+        return mAudioFlinger->latency(mAudioDirectOutput);
+    } else if (mOutput != 0) {
+        uint32_t afLatency = 0;
+        uint32_t newLatency = 0;
+        AudioSystem::getLatency(mOutput, mStreamType, &afLatency);
+        if((0 != mSampleRate) && (NULL != mCblk)) {
+            newLatency = afLatency + (1000 * mCblk->frameCount_) / mSampleRate;
+        } else {
+            newLatency = afLatency;
+        }
+        ALOGV("latency() mLatency = %d, newLatency = %d", mLatency, newLatency);
+        return newLatency;
+    }
+#endif
+    return mLatency;
+}
 
 void AudioTrack::start()
 {
@@ -1644,7 +1689,18 @@ status_t AudioTrack::dump(int fd, const Vector<String16>& args) const
     result.append(buffer);
     snprintf(buffer, 255, "  sample rate(%u), status(%d)\n", mSampleRate, mStatus);
     result.append(buffer);
+#ifdef QCOM_HARDWARE
+    uint32_t afLatency = 0;
+    AudioSystem::getLatency(mOutput, mStreamType, &afLatency);
+    if((0 != mSampleRate) && (NULL != mCblk)) {
+        snprintf(buffer, 255, "  active(%d), latency (%d)\n", mActive,
+                        (afLatency + (1000 * mCblk->frameCount_) / mSampleRate));
+    } else {
+        snprintf(buffer, 255, "  active(%d), latency (%d)\n", mActive, afLatency);
+    }
+#else
     snprintf(buffer, 255, "  active(%d), latency (%d)\n", mActive, mLatency);
+#endif
     result.append(buffer);
     ::write(fd, result.string(), result.size());
     return NO_ERROR;
@@ -1718,5 +1774,4 @@ void AudioTrack::AudioTrackThread::resume()
         mMyCond.signal();
     }
 }
-
 }; // namespace android

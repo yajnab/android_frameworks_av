@@ -1,3 +1,22 @@
+#
+# This file was modified by Dolby Laboratories, Inc. The portions of the
+# code that are surrounded by "DOLBY..." are copyrighted and
+# licensed separately, as follows:
+#
+#  (C) 2012-2013 Dolby Laboratories, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
 LOCAL_PATH:= $(call my-dir)
 
 include $(CLEAR_VARS)
@@ -16,6 +35,12 @@ include $(CLEAR_VARS)
 ifneq ($(filter caf bfam,$(TARGET_QCOM_AUDIO_VARIANT)),)
     LOCAL_CFLAGS += -DQCOM_ENHANCED_AUDIO
 endif
+
+# RESOURCE MANAGER
+ifeq ($(strip $(BOARD_USES_RESOURCE_MANAGER)),true)
+LOCAL_CFLAGS += -DRESOURCE_MANAGER
+endif
+# RESOURCE MANAGER
 
 LOCAL_SRC_FILES:=               \
     AudioFlinger.cpp            \
@@ -92,6 +117,10 @@ ifeq ($(TARGET_CPU_SMP),true)
 else
     LOCAL_CFLAGS += -DANDROID_SMP=0
 endif
+
+ifdef DOLBY_DAP
+    LOCAL_CFLAGS += -DDOLBY_DAP_QDSP
+endif # DOLBY_END
 
 include $(BUILD_SHARED_LIBRARY)
 
